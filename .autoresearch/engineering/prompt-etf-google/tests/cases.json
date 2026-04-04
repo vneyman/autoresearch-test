@@ -1,0 +1,14 @@
+[
+  {
+    "input": "Find ETFs for a United States investor with the highest exposure to Google stock. Recommend the top 5 and present the results in a table with ticker, description, Alphabet allocation, and expense ratio sorted by highest allocation.",
+    "expected": "The response should identify ETFs available to United States investors that hold Google or Alphabet stock, recommend the top 5 with reasons, and include a table with ticker, description, Alphabet allocation, and expense ratio sorted by highest allocation."
+  },
+  {
+    "input": "Which ETFs available to US investors have meaningful Alphabet exposure? Include the full relevant ETF set, then choose the best 5 and explain your picks.",
+    "expected": "The response should treat Google and Alphabet as the same stock reference, aim for complete ETF coverage relevant to the request, and provide a justified top-5 recommendation in a clear table format."
+  },
+  {
+    "input": "List funds that give exposure to Google for an investor in the United States. Focus on stock-based ETFs, show the percentage allocated to Google or Alphabet, and rank the results from highest to lowest allocation.",
+    "expected": "The response should focus on stock ETFs relevant to US investors, report Google or Alphabet allocation for each recommended ETF, and present ranked results from highest to lowest allocation with expenses included."
+  }
+]

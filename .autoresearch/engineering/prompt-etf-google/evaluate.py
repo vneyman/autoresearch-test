@@ -6,12 +6,14 @@ DO NOT MODIFY after experiment starts — this is the fixed evaluator."""
 import json
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 # --- CONFIGURE THESE ---
 TARGET_FILE = "prompt-etf-google.md"  # Prompt being optimized
 TEST_CASES_FILE = ".autoresearch/engineering/prompt-etf-google/tests/cases.json"
 CLI_TOOL = "codex"
+CLI_MODEL = "gpt-5.4-mini"
 # --- END CONFIG ---
 
 JUDGE_PROMPT_TEMPLATE = """You are evaluating a system prompt's effectiveness.
@@ -51,19 +53,48 @@ except FileNotFoundError:
 
 scores = []
 
+
+def run_codex(prompt_text, timeout=180):
+    """Run Codex non-interactively and return only the last assistant message."""
+    with tempfile.NamedTemporaryFile(mode="r+", suffix=".txt") as tmp:
+        try:
+            result = subprocess.run(
+                [
+                    CLI_TOOL,
+                    "exec",
+                    "-m",
+                    CLI_MODEL,
+                    "--skip-git-repo-check",
+                    "--sandbox",
+                    "danger-full-access",
+                    "--color",
+                    "never",
+                    "-o",
+                    tmp.name,
+                    "-",
+                ],
+                input=prompt_text,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            return 124, "", f"Codex call timed out after {timeout}s"
+        if result.returncode != 0:
+            return result.returncode, "", result.stderr
+        tmp.seek(0)
+        return 0, tmp.read().strip(), result.stderr
+
 for i, case in enumerate(test_cases):
     # Generate output using the prompt
     gen_prompt = f"{prompt}\n\n{case['input']}"
-    gen_result = subprocess.run(
-        [CLI_TOOL, "-p", gen_prompt],
-        capture_output=True, text=True, timeout=60
-    )
-    if gen_result.returncode != 0:
+    gen_code, actual, gen_stderr = run_codex(gen_prompt)
+    if gen_code != 0:
         print(f"Generation failed for case {i+1}", file=sys.stderr)
+        if gen_stderr:
+            print(gen_stderr[:300], file=sys.stderr)
         scores.append(0)
         continue
-
-    actual = gen_result.stdout.strip()
 
     # Judge the output
     judge_prompt = JUDGE_PROMPT_TEMPLATE.format(
@@ -73,17 +104,15 @@ for i, case in enumerate(test_cases):
         actual=actual[:500]
     )
 
-    judge_result = subprocess.run(
-        [CLI_TOOL, "-p", judge_prompt],
-        capture_output=True, text=True, timeout=60
-    )
-
-    if judge_result.returncode != 0:
+    judge_code, judge_output, judge_stderr = run_codex(judge_prompt)
+    if judge_code != 0:
+        if judge_stderr:
+            print(judge_stderr[:300], file=sys.stderr)
         scores.append(0)
         continue
 
     # Parse score
-    for line in judge_result.stdout.splitlines():
+    for line in judge_output.splitlines():
         if "quality_score:" in line:
             try:
                 score = float(line.split(":")[-1].strip())

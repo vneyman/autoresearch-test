@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 
 # --- CONFIGURE THESE ---
-TARGET_FILE = "prompt-etf-google.md"  # Prompt being optimized
+TARGET_FILE = ".autoresearch/engineering/prompt-etf-google/prompt-etf-google.md"
 TEST_CASES_FILE = ".autoresearch/engineering/prompt-etf-google/tests/cases.json"
 CLI_TOOL = "codex"
 CLI_MODEL = "gpt-5.4-mini"

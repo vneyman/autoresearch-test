@@ -1,0 +1,1 @@
+Top 10 ETFs that hold Google stock for a United States investor. Recommend the top 5 and explain why each was selected. Include a table with ETF ticker, description, percentage allocation to Google/Alphabet stock, and expense ratio. Sort by highest Google/Alphabet allocation.

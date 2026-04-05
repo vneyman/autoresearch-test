@@ -10,12 +10,15 @@ candidate change before invoking `tick`, or to provide a prepare command hook.
 
 import argparse
 import json
+import re
+import shlex
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 DEFAULT_WORKFLOW_FILE = ".github/workflows/autoresearch-loop.yml"
+SUPPORTED_PROVIDERS = {"codex", "claude", "gemini"}
 
 
 def find_autoresearch_root(project_root):
@@ -158,9 +161,63 @@ def print_loop(loop_data, results):
 
     if loop_data.get("prepare_cmd"):
         print(f"  Prepare command: {loop_data['prepare_cmd']}")
+    if loop_data.get("prepare_provider"):
+        line = f"  Prepare provider: {loop_data['prepare_provider']}"
+        if loop_data.get("prepare_model"):
+            line += f" ({loop_data['prepare_model']})"
+        print(line)
 
     crash_streak = count_consecutive_status(results, "crash")
     print(f"  Crash streak: {crash_streak}/5")
+
+
+def parse_evaluator_provider(experiment_dir):
+    config_path = experiment_dir / "config.cfg"
+    if not config_path.exists():
+        return None
+
+    evaluate_cmd = None
+    for line in config_path.read_text().splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        if key.strip() == "evaluate_cmd":
+            evaluate_cmd = value.strip()
+            break
+    if not evaluate_cmd:
+        return None
+
+    parts = evaluate_cmd.split()
+    script_path = None
+    for token in parts:
+        if token.endswith(".py"):
+            script_path = token
+            break
+    if not script_path:
+        return None
+
+    candidate = (experiment_dir.parents[2] / script_path).resolve()
+    if not candidate.exists():
+        candidate = (experiment_dir / script_path).resolve()
+    if not candidate.exists():
+        return None
+
+    match = re.search(r'CLI_TOOL\s*=\s*"([^"]+)"', candidate.read_text())
+    if not match:
+        return None
+    provider = match.group(1).strip()
+    return provider if provider in SUPPORTED_PROVIDERS else None
+
+
+def required_providers(experiment_dir, loop_data):
+    providers = set()
+    provider = loop_data.get("prepare_provider")
+    if provider in SUPPORTED_PROVIDERS:
+        providers.add(provider)
+    evaluator = parse_evaluator_provider(experiment_dir)
+    if evaluator in SUPPORTED_PROVIDERS:
+        providers.add(evaluator)
+    return sorted(providers)
 
 
 def iter_experiment_dirs(root):
@@ -185,13 +242,25 @@ def start_loop(args, project_root, root):
         "branch_ref": args.branch_ref or current_branch(project_root),
         "experiment": args.experiment,
         "interval": args.interval,
+        "prepare_provider": args.prepare_provider,
         "started": datetime.now(timezone.utc).isoformat(),
         "workflow_file": args.workflow_file,
     }
-    default_prepare = (
-        f'python3 .autoresearch/bin/prepare_iteration.py --experiment {args.experiment} --path .'
-    )
-    payload["prepare_cmd"] = args.prepare_cmd or default_prepare
+    if args.prepare_model:
+        payload["prepare_model"] = args.prepare_model
+    default_prepare = [
+        "python3",
+        ".autoresearch/bin/prepare_iteration.py",
+        "--experiment",
+        args.experiment,
+        "--path",
+        ".",
+        "--provider",
+        args.prepare_provider,
+    ]
+    if args.prepare_model:
+        default_prepare.extend(["--model", args.prepare_model])
+    payload["prepare_cmd"] = args.prepare_cmd or shlex.join(default_prepare)
     if args.max_iterations is not None:
         payload["max_iterations"] = args.max_iterations
         payload["completed_iterations"] = 0
@@ -202,6 +271,21 @@ def start_loop(args, project_root, root):
 
     print("Loop started")
     print_loop(payload, load_results(experiment_dir))
+
+
+def providers_for_interval(args, project_root, root):
+    providers = set()
+    for _, experiment_dir in iter_experiment_dirs(root):
+        loop_data = load_loop(experiment_dir)
+        if not loop_data:
+            continue
+        if loop_data.get("backend", "github_actions") != "github_actions":
+            continue
+        if loop_data.get("interval") != args.interval:
+            continue
+        providers.update(required_providers(experiment_dir, loop_data))
+
+    print(" ".join(sorted(providers)))
 
 
 def status_loop(args, project_root, root):
@@ -248,7 +332,10 @@ def maybe_stop_before_tick(experiment_dir, loop_data, results):
 
 
 def run_shell_hook(cmd, cwd):
-    result = subprocess.run(cmd, shell=True, cwd=str(cwd))
+    if isinstance(cmd, str):
+        result = subprocess.run(cmd, shell=True, cwd=str(cwd))
+    else:
+        result = subprocess.run(cmd, cwd=str(cwd))
     return result.returncode
 
 
@@ -258,6 +345,10 @@ def run_iteration(project_root, experiment, experiment_dir, loop_data, dry_run=F
         return "stopped"
 
     checkout_branch(project_root, loop_data["branch_ref"])
+
+    if dry_run:
+        print("Dry run: would checkout branch, prepare one change, and run run_experiment.py --dry-run")
+        return "dry_run"
 
     effective_prepare_cmd = prepare_cmd or loop_data.get("prepare_cmd")
     if effective_prepare_cmd:
@@ -372,6 +463,13 @@ def main():
     start.add_argument("--interval", required=True, help="Loop interval: 5m, 30m, 1h, daily, weekly, monthly")
     start.add_argument("--branch-ref", help="Existing branch to run iterations on (defaults to current branch)")
     start.add_argument("--workflow-file", default=DEFAULT_WORKFLOW_FILE, help="GitHub Actions workflow file path")
+    start.add_argument(
+        "--prepare-provider",
+        choices=sorted(SUPPORTED_PROVIDERS),
+        default="codex",
+        help="LLM CLI provider for the default prepare step",
+    )
+    start.add_argument("--prepare-model", help="Optional model override for the default prepare step")
     start.add_argument("--prepare-cmd", help="Command to prepare one candidate change inside the Actions runner")
     start.add_argument("--max-iterations", type=int, help="Maximum total number of iterations")
     start.add_argument(
@@ -399,6 +497,9 @@ def main():
     dispatch.add_argument("--dry-run", action="store_true", help="Call run_experiment.py in dry-run mode")
     dispatch.add_argument("--keep-going", action="store_true", help="Continue dispatching even if one loop fails")
 
+    providers = subparsers.add_parser("providers-for-interval", help="Print required CLI providers for one interval")
+    providers.add_argument("--interval", required=True, help="Loop interval: 5m, 30m, 1h, daily, weekly, monthly")
+
     args = parser.parse_args()
     project_root = Path(args.path).resolve()
     root = find_autoresearch_root(project_root)
@@ -416,6 +517,8 @@ def main():
         tick_loop(args, project_root, root)
     elif args.command == "dispatch-due":
         dispatch_due(args, project_root, root)
+    elif args.command == "providers-for-interval":
+        providers_for_interval(args, project_root, root)
 
 
 if __name__ == "__main__":

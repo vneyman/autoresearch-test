@@ -40,8 +40,23 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Detect required providers
+        id: providers
+        run: |
+          value="$(python3 .autoresearch/bin/loop_manager.py --path . providers-for-interval --interval "${{ steps.interval.outputs.value }}")"
+          echo "value=$value" >> "$GITHUB_OUTPUT"
+
       - name: Install Codex CLI
+        if: contains(steps.providers.outputs.value, 'codex')
         run: npm install -g @openai/codex
+
+      - name: Install Claude CLI
+        if: contains(steps.providers.outputs.value, 'claude')
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Install Gemini CLI
+        if: contains(steps.providers.outputs.value, 'gemini')
+        run: npm install -g @google/gemini-cli
 
       - name: Configure git identity
         run: |
@@ -69,6 +84,8 @@ jobs:
       - name: Dispatch due experiments
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           python3 .autoresearch/bin/loop_manager.py --path . dispatch-due --interval "${{ steps.interval.outputs.value }}"
 

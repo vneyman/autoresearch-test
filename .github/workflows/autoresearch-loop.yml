@@ -1,0 +1,76 @@
+name: Autoresearch Loop
+
+on:
+  workflow_dispatch:
+    inputs:
+      interval:
+        description: Optional interval to dispatch
+        required: false
+        type: choice
+        options:
+          - 5m
+          - 30m
+          - 1h
+          - daily
+          - weekly
+          - monthly
+  schedule:
+    - cron: '*/5 * * * *'
+    - cron: '17,47 * * * *'
+    - cron: '7 * * * *'
+    - cron: '57 8 * * *'
+    - cron: '57 8 * * 1'
+    - cron: '57 8 1 * *'
+
+jobs:
+  dispatch:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Codex CLI
+        run: npm install -g @openai/codex
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Determine interval
+        id: interval
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.interval }}" ]; then
+            echo "value=${{ inputs.interval }}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          case "${{ github.event.schedule }}" in
+            "*/5 * * * *") echo "value=5m" >> "$GITHUB_OUTPUT" ;;
+            "17,47 * * * *") echo "value=30m" >> "$GITHUB_OUTPUT" ;;
+            "7 * * * *") echo "value=1h" >> "$GITHUB_OUTPUT" ;;
+            "57 8 * * *") echo "value=daily" >> "$GITHUB_OUTPUT" ;;
+            "57 8 * * 1") echo "value=weekly" >> "$GITHUB_OUTPUT" ;;
+            "57 8 1 * *") echo "value=monthly" >> "$GITHUB_OUTPUT" ;;
+            *) echo "Unsupported schedule: ${{ github.event.schedule }}" >&2; exit 1 ;;
+          esac
+
+      - name: Dispatch due experiments
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python3 .autoresearch/bin/loop_manager.py --path . dispatch-due --interval "${{ steps.interval.outputs.value }}"
+
+      - name: Push kept experiment commits
+        run: git push --all origin

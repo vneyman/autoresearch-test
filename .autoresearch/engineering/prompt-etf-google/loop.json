@@ -1,0 +1,13 @@
+{
+  "backend": "github_actions",
+  "branch_ref": "main",
+  "completed_iterations": 0,
+  "consecutive_no_improve": 0,
+  "experiment": "engineering/prompt-etf-google",
+  "interval": "5m",
+  "max_iterations": 5,
+  "prepare_cmd": "python3 .autoresearch/bin/prepare_iteration.py --experiment engineering/prompt-etf-google --path .",
+  "started": "2026-04-05T18:32:21.415379+00:00",
+  "stop_after_no_improve": 5,
+  "workflow_file": ".github/workflows/autoresearch-loop.yml"
+}

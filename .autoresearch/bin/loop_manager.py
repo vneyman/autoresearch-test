@@ -20,6 +20,9 @@ from pathlib import Path
 
 DEFAULT_WORKFLOW_FILE = ".github/workflows/autoresearch-loop.yml"
 SUPPORTED_PROVIDERS = {"codex", "claude", "gemini"}
+DEFAULT_PREPARE_MODELS = {
+    "gemini": "gemini-3.1-pro-preview",
+}
 TRANSIENT_PREPARE_ERROR_PATTERNS = (
     r"responses_websocket: failed to connect to websocket: HTTP error: 500",
     r"unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api\.openai\.com/v1/responses",
@@ -242,6 +245,7 @@ def start_loop(args, project_root, root):
         print("Use --replace to overwrite the existing loop metadata.")
         sys.exit(1)
 
+    prepare_model = args.prepare_model or DEFAULT_PREPARE_MODELS.get(args.prepare_provider)
     payload = {
         "backend": "github_actions",
         "branch_ref": args.branch_ref or current_branch(project_root),
@@ -251,8 +255,8 @@ def start_loop(args, project_root, root):
         "started": datetime.now(timezone.utc).isoformat(),
         "workflow_file": args.workflow_file,
     }
-    if args.prepare_model:
-        payload["prepare_model"] = args.prepare_model
+    if prepare_model:
+        payload["prepare_model"] = prepare_model
     default_prepare = [
         "python3",
         ".autoresearch/bin/prepare_iteration.py",
@@ -263,8 +267,8 @@ def start_loop(args, project_root, root):
         "--provider",
         args.prepare_provider,
     ]
-    if args.prepare_model:
-        default_prepare.extend(["--model", args.prepare_model])
+    if prepare_model:
+        default_prepare.extend(["--model", prepare_model])
     payload["prepare_cmd"] = args.prepare_cmd or shlex.join(default_prepare)
     if args.max_iterations is not None:
         payload["max_iterations"] = args.max_iterations

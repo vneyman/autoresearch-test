@@ -6,9 +6,9 @@
   "experiment": "engineering/prompt-etf-google",
   "interval": "5m",
   "max_iterations": 5,
-  "prepare_cmd": "python3 .autoresearch/bin/prepare_iteration.py --experiment engineering/prompt-etf-google --path . --provider codex --model gpt-5.4-mini",
-  "prepare_model": "gpt-5.4-mini",
-  "prepare_provider": "codex",
+  "prepare_cmd": "python3 .autoresearch/bin/prepare_iteration.py --experiment engineering/prompt-etf-google --path . --provider gemini --model gemini-1.5-pro",
+  "prepare_model": "gemini-1.5-pro",
+  "prepare_provider": "gemini",
   "started": "2026-04-05T18:52:04.202929+00:00",
   "stop_after_no_improve": 5,
   "workflow_file": ".github/workflows/autoresearch-loop.yml"

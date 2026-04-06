@@ -1,1 +1,1 @@
-For an investor in the United States, provide a comprehensive ETF research report. Display in table
+List all available ETFs for an investor in the United States. Recommend the top 5 ETFs that include an allocation to Google (Alphabet) stock, and provide a reason for each selection. Present the recommendations in a table format with the following columns: ETF ticker, description, percentage allocation to Google (Alphabet) stock, and ETF expenses. Sort the table by the highest percentage allocation.

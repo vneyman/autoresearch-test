@@ -142,6 +142,48 @@ jobs:
         if: (github.event_name == 'workflow_dispatch' || steps.run_window.outputs.allowed == 'true') && contains(steps.providers.outputs.value, 'gemini')
         run: npm install -g @google/gemini-cli
 
+      - name: Preflight OpenAI auth
+        if: (github.event_name == 'workflow_dispatch' || steps.run_window.outputs.allowed == 'true') && contains(steps.providers.outputs.value, 'codex')
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+
+          api_key = (os.environ.get("OPENAI_API_KEY") or "").strip()
+          if not api_key:
+              print("OPENAI_API_KEY is missing or empty", file=sys.stderr)
+              raise SystemExit(1)
+          if " " in api_key or "\n" in api_key or "\r" in api_key or "\t" in api_key:
+              print("OPENAI_API_KEY contains whitespace; update the secret with a single-line key", file=sys.stderr)
+              raise SystemExit(1)
+          if not api_key.startswith("sk-"):
+              print("OPENAI_API_KEY does not appear to be an OpenAI key (expected prefix: sk-)", file=sys.stderr)
+              raise SystemExit(1)
+
+          req = urllib.request.Request(
+              "https://api.openai.com/v1/models",
+              headers={"Authorization": f"Bearer {api_key}"},
+          )
+          try:
+              with urllib.request.urlopen(req) as resp:
+                  body = json.loads(resp.read().decode("utf-8"))
+                  model_count = len(body.get("data", []))
+                  print(f"OpenAI auth preflight passed (models visible: {model_count})")
+          except urllib.error.HTTPError as exc:
+              body = exc.read().decode("utf-8", errors="replace")
+              print(f"OpenAI auth preflight failed: HTTP {exc.code}", file=sys.stderr)
+              print(body[:500], file=sys.stderr)
+              raise SystemExit(1)
+          except Exception as exc:
+              print(f"OpenAI auth preflight failed: {exc}", file=sys.stderr)
+              raise SystemExit(1)
+          PY
+
       - name: Configure git identity
         run: |
           git config user.name "github-actions[bot]"

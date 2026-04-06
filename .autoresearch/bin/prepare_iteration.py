@@ -9,6 +9,7 @@ inside GitHub Actions or other non-interactive loop environments before
 """
 
 import argparse
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -138,6 +139,9 @@ def build_cli_command(provider, prompt, model):
 
 def run_provider(project_root, provider, prompt, model, timeout):
     cmd, stdin_payload = build_cli_command(provider, prompt, model)
+    binary = cmd[0]
+    if shutil.which(binary) is None:
+        raise FileNotFoundError(f"Required CLI '{binary}' was not found in PATH")
     return subprocess.run(
         cmd,
         cwd=str(project_root),
@@ -239,6 +243,9 @@ def main():
 
     try:
         result = run_provider(project_root, args.provider, prompt, args.model, args.timeout)
+    except FileNotFoundError as exc:
+        print(str(exc), file=sys.stderr)
+        sys.exit(1)
     except subprocess.TimeoutExpired:
         print(f"{args.provider} edit timed out after {args.timeout}s", file=sys.stderr)
         sys.exit(1)

@@ -1,5 +1,8 @@
 name: Autoresearch Loop
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 on:
   workflow_dispatch:
     inputs:
@@ -16,15 +19,11 @@ on:
           - monthly
   schedule:
     - cron: '*/5 * * * *'
-    - cron: '17,47 * * * *'
-    - cron: '7 * * * *'
-    - cron: '57 8 * * *'
-    - cron: '57 8 * * 1'
-    - cron: '57 8 1 * *'
 
 jobs:
   dispatch:
     permissions:
+      actions: write
       contents: write
     runs-on: ubuntu-latest
     steps:
@@ -40,29 +39,6 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Detect required providers
-        id: providers
-        run: |
-          value="$(python3 .autoresearch/bin/loop_manager.py --path . providers-for-interval --interval "${{ steps.interval.outputs.value }}")"
-          echo "value=$value" >> "$GITHUB_OUTPUT"
-
-      - name: Install Codex CLI
-        if: contains(steps.providers.outputs.value, 'codex')
-        run: npm install -g @openai/codex
-
-      - name: Install Claude CLI
-        if: contains(steps.providers.outputs.value, 'claude')
-        run: npm install -g @anthropic-ai/claude-code
-
-      - name: Install Gemini CLI
-        if: contains(steps.providers.outputs.value, 'gemini')
-        run: npm install -g @google/gemini-cli
-
-      - name: Configure git identity
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
       - name: Determine interval
         id: interval
         run: |
@@ -73,15 +49,106 @@ jobs:
 
           case "${{ github.event.schedule }}" in
             "*/5 * * * *") echo "value=5m" >> "$GITHUB_OUTPUT" ;;
-            "17,47 * * * *") echo "value=30m" >> "$GITHUB_OUTPUT" ;;
-            "7 * * * *") echo "value=1h" >> "$GITHUB_OUTPUT" ;;
-            "57 8 * * *") echo "value=daily" >> "$GITHUB_OUTPUT" ;;
-            "57 8 * * 1") echo "value=weekly" >> "$GITHUB_OUTPUT" ;;
-            "57 8 1 * *") echo "value=monthly" >> "$GITHUB_OUTPUT" ;;
             *) echo "Unsupported schedule: ${{ github.event.schedule }}" >&2; exit 1 ;;
           esac
 
+      - name: Enforce 3 scheduled runs
+        id: run_window
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          WORKFLOW_FILE: autoresearch-loop.yml
+          THIS_RUN_ID: ${{ github.run_id }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+          from datetime import datetime
+          from datetime import timezone
+          from urllib.request import Request, urlopen
+
+          repo = os.environ["REPO"]
+          workflow = os.environ["WORKFLOW_FILE"]
+          token = os.environ["GH_TOKEN"]
+          this_run_id = int(os.environ["THIS_RUN_ID"])
+          output_file = os.environ["GITHUB_OUTPUT"]
+
+          headers = {
+              "Authorization": f"Bearer {token}",
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2022-11-28",
+              "User-Agent": "autoresearch-loop",
+          }
+
+          def get_json(url: str):
+              req = Request(url, headers=headers)
+              with urlopen(req) as resp:
+                  return json.loads(resp.read().decode("utf-8"))
+
+          workflow_meta = get_json(f"https://api.github.com/repos/{repo}/actions/workflows/{workflow}")
+          enabled_at = datetime.fromisoformat(workflow_meta["updated_at"].replace("Z", "+00:00"))
+          enabled_at = enabled_at.astimezone(timezone.utc)
+
+          runs = get_json(
+              f"https://api.github.com/repos/{repo}/actions/workflows/{workflow}/runs?event=schedule&per_page=100"
+          )["workflow_runs"]
+
+          def parse_dt(value: str) -> datetime:
+              return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+
+          runs_since_enabled = [
+              run for run in runs
+              if parse_dt(run["created_at"]) >= enabled_at
+          ]
+          allowed = len(runs_since_enabled) <= 3
+          print(f"scheduled runs since workflow enable/update: {len(runs_since_enabled)}")
+          print(f"current run allowed: {allowed}")
+
+          with open(output_file, "a", encoding="utf-8") as fh:
+              fh.write(f"allowed={'true' if allowed else 'false'}\n")
+
+          if allowed:
+              raise SystemExit(0)
+
+          req = Request(
+              f"https://api.github.com/repos/{repo}/actions/workflows/{workflow}/disable",
+              data=b"",
+              method="PUT",
+              headers=headers,
+          )
+          with urlopen(req):
+              pass
+          print("Disabled workflow after exceeding 3 scheduled runs.")
+          PY
+
+      - name: Detect required providers
+        id: providers
+        if: github.event_name == 'workflow_dispatch' || steps.run_window.outputs.allowed == 'true'
+        run: |
+          value="$(python3 .autoresearch/bin/loop_manager.py --path . providers-for-interval --interval "${{ steps.interval.outputs.value }}")"
+          echo "value=$value" >> "$GITHUB_OUTPUT"
+
+      - name: Install Codex CLI
+        if: (github.event_name == 'workflow_dispatch' || steps.run_window.outputs.allowed == 'true') && contains(steps.providers.outputs.value, 'codex')
+        run: npm install -g @openai/codex
+
+      - name: Install Claude CLI
+        if: (github.event_name == 'workflow_dispatch' || steps.run_window.outputs.allowed == 'true') && contains(steps.providers.outputs.value, 'claude')
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Install Gemini CLI
+        if: (github.event_name == 'workflow_dispatch' || steps.run_window.outputs.allowed == 'true') && contains(steps.providers.outputs.value, 'gemini')
+        run: npm install -g @google/gemini-cli
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
       - name: Dispatch due experiments
+        if: github.event_name == 'workflow_dispatch' || steps.run_window.outputs.allowed == 'true'
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -90,4 +157,5 @@ jobs:
           python3 .autoresearch/bin/loop_manager.py --path . dispatch-due --interval "${{ steps.interval.outputs.value }}"
 
       - name: Push kept experiment commits
+        if: github.event_name == 'workflow_dispatch' || steps.run_window.outputs.allowed == 'true'
         run: git push --all origin

@@ -14,11 +14,16 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 DEFAULT_WORKFLOW_FILE = ".github/workflows/autoresearch-loop.yml"
 SUPPORTED_PROVIDERS = {"codex", "claude", "gemini"}
+TRANSIENT_PREPARE_ERROR_PATTERNS = (
+    r"responses_websocket: failed to connect to websocket: HTTP error: 500",
+    r"unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api\.openai\.com/v1/responses",
+)
 
 
 def find_autoresearch_root(project_root):
@@ -339,6 +344,48 @@ def run_shell_hook(cmd, cwd):
     return result.returncode
 
 
+def is_transient_prepare_failure(text):
+    if not text:
+        return False
+    return any(re.search(pattern, text) for pattern in TRANSIENT_PREPARE_ERROR_PATTERNS)
+
+
+def run_prepare_with_retry(cmd, cwd, max_attempts=3, base_delay_seconds=3):
+    for attempt in range(1, max_attempts + 1):
+        if isinstance(cmd, str):
+            result = subprocess.run(
+                cmd,
+                shell=True,
+                cwd=str(cwd),
+                capture_output=True,
+                text=True,
+            )
+        else:
+            result = subprocess.run(
+                cmd,
+                cwd=str(cwd),
+                capture_output=True,
+                text=True,
+            )
+
+        output = (result.stdout or "") + (result.stderr or "")
+        if output:
+            print(output, end="" if output.endswith("\n") else "\n")
+        if result.returncode == 0:
+            return 0
+        if attempt >= max_attempts or not is_transient_prepare_failure(output):
+            return result.returncode
+
+        delay = base_delay_seconds * (2 ** (attempt - 1))
+        print(
+            "Prepare command failed due to a transient Codex transport/auth error; "
+            f"retrying in {delay}s ({attempt}/{max_attempts})..."
+        )
+        time.sleep(delay)
+
+    return 1
+
+
 def run_iteration(project_root, experiment, experiment_dir, loop_data, dry_run=False, description=None, prepare_cmd=None):
     results_before = load_results(experiment_dir)
     if maybe_stop_before_tick(experiment_dir, loop_data, results_before):
@@ -353,7 +400,7 @@ def run_iteration(project_root, experiment, experiment_dir, loop_data, dry_run=F
     effective_prepare_cmd = prepare_cmd or loop_data.get("prepare_cmd")
     if effective_prepare_cmd:
         print(f"Running prepare command: {effective_prepare_cmd}")
-        hook_code = run_shell_hook(effective_prepare_cmd, project_root)
+        hook_code = run_prepare_with_retry(effective_prepare_cmd, project_root)
         if hook_code != 0:
             print(f"Prepare command failed with exit {hook_code}")
             return "prepare_failed"
